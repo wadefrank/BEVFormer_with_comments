@@ -1,0 +1,7 @@
+nuscenes
+can_bus
+pretrain
+test/
+.vscode/
+mmdetection3d/
+*.pyc

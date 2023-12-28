@@ -59,28 +59,55 @@ class BEVFormerEncoder(TransformerLayerSequence):
 
         # reference points in 3D space, used in spatial cross-attention (SCA)
         if dim == '3d':
+            # a = torch.linspace(0.5, 7.5, 4) = tensor([0.5000, 2.8333, 5.1667, 7.5000])
+            # b = a.view(-1, 1, 1) = tensor([[[0.5000]], [[2.8333]], [[5.1667]], [[7.5000]]])
+            # c = b.expand(num_points_in_pillar, H, W) 扩展张量的尺度
+            # d = c / Z  归一化
+            # zs.shape = torch.Size([4, 200, 200])
             zs = torch.linspace(0.5, Z - 0.5, num_points_in_pillar, dtype=dtype,
                                 device=device).view(-1, 1, 1).expand(num_points_in_pillar, H, W) / Z
+            # xs.shape = torch.Size([4, 200, 200])
             xs = torch.linspace(0.5, W - 0.5, W, dtype=dtype,
                                 device=device).view(1, 1, W).expand(num_points_in_pillar, H, W) / W
+            # ys.shape = torch.Size([4, 200, 200])
             ys = torch.linspace(0.5, H - 0.5, H, dtype=dtype,
                                 device=device).view(1, H, 1).expand(num_points_in_pillar, H, W) / H
+            
+            # ref_3d.shape = torch.Size([4, 200, 200, 3])
             ref_3d = torch.stack((xs, ys, zs), -1)
+
+            # a = ref_3d.permute(0, 3, 1, 2)  a.shape = torch.Size([4, 3, 200, 200])
+            # b = a.flatten(2)                b.shape = torch.Size([4, 3, 40000])
+            # c = b.permute(0, 2, 1)          c.shape = torch.Size([4, 40000, 3])
+            # ref_3d.shape = torch.Size([4, 40000, 3])
             ref_3d = ref_3d.permute(0, 3, 1, 2).flatten(2).permute(0, 2, 1)
+            
+            # a = ref_3d[None] a.shape = torch.Size([1, 4, 40000, 3])
+            # b = a.repeat(bs, 1, 1, 1) b.shape = torch.Size([1, 4, 40000, 3])
+            # ref_3d.shape = torch.Size([1, 4, 40000, 3])
             ref_3d = ref_3d[None].repeat(bs, 1, 1, 1)
             return ref_3d
 
         # reference points on 2D bev plane, used in temporal self-attention (TSA).
         elif dim == '2d':
+            # ref_y.shape = torch.Size([200, 200])
+            # ref_x.shape = torch.Size([200, 200])
             ref_y, ref_x = torch.meshgrid(
                 torch.linspace(
                     0.5, H - 0.5, H, dtype=dtype, device=device),
                 torch.linspace(
                     0.5, W - 0.5, W, dtype=dtype, device=device)
             )
+            # ref_y.shape = torch.Size([1, 40000])
             ref_y = ref_y.reshape(-1)[None] / H
+
+            # ref_x.shape = torch.Size([1, 40000])
             ref_x = ref_x.reshape(-1)[None] / W
+
+            # ref_2d.shape = torch.Size([1, 40000, 2])
             ref_2d = torch.stack((ref_x, ref_y), -1)
+
+            # ref_2d.shape = torch.Size([1, 40000, 1, 2])
             ref_2d = ref_2d.repeat(bs, 1, 1).unsqueeze(2)
             return ref_2d
 
@@ -88,27 +115,27 @@ class BEVFormerEncoder(TransformerLayerSequence):
     @force_fp32(apply_to=('reference_points', 'img_metas'))
     def point_sampling(self, reference_points, pc_range,  img_metas):
         # NOTE: close tf32 here.
-        allow_tf32 = torch.backends.cuda.matmul.allow_tf32
+        allow_tf32 = torch.backends.cuda.matmul.allow_tf32  # 1.由归一化参考点-->lidar系下的实际参考点-->齐次坐标
         torch.backends.cuda.matmul.allow_tf32 = False
         torch.backends.cudnn.allow_tf32 = False
-
+        # 1.由归一化3d参考点-->lidar系下的实际参考点-->齐次坐标
         lidar2img = []
         for img_meta in img_metas:
             lidar2img.append(img_meta['lidar2img'])
         lidar2img = np.asarray(lidar2img)
         lidar2img = reference_points.new_tensor(lidar2img)  # (B, N, 4, 4)
         reference_points = reference_points.clone()
-
+        # 将归一化3d参考点转换到lidar系下的实际位置
         reference_points[..., 0:1] = reference_points[..., 0:1] * \
-            (pc_range[3] - pc_range[0]) + pc_range[0]
+        (pc_range[3] - pc_range[0]) + pc_range[0]
         reference_points[..., 1:2] = reference_points[..., 1:2] * \
             (pc_range[4] - pc_range[1]) + pc_range[1]
         reference_points[..., 2:3] = reference_points[..., 2:3] * \
             (pc_range[5] - pc_range[2]) + pc_range[2]
-
+        # 齐次坐标
         reference_points = torch.cat(
             (reference_points, torch.ones_like(reference_points[..., :1])), -1)
-
+        # 2.由lidar系转化为camera系 6个相机
         reference_points = reference_points.permute(1, 0, 2, 3)
         D, B, num_query = reference_points.size()[:3]
         num_cam = lidar2img.size(1)
@@ -121,8 +148,10 @@ class BEVFormerEncoder(TransformerLayerSequence):
 
         reference_points_cam = torch.matmul(lidar2img.to(torch.float32),
                                             reference_points.to(torch.float32)).squeeze(-1)
+        # 3.由camera系转到图像系并归一化, 同时计算mask
         eps = 1e-5
-
+        
+        # bev_mask 用于评判某一 三维坐标点 是否落在了 二维坐标平面上
         bev_mask = (reference_points_cam[..., 2:3] > eps)
         reference_points_cam = reference_points_cam[..., 0:2] / torch.maximum(
             reference_points_cam[..., 2:3], torch.ones_like(reference_points_cam[..., 2:3]) * eps)
@@ -182,14 +211,22 @@ class BEVFormerEncoder(TransformerLayerSequence):
                 [num_layers, num_query, bs, embed_dims].
         """
 
-        output = bev_query
-        intermediate = []
+        output = bev_query  # bev_query.shape = torch.Size([bev_h * bev_w, 1, 256])
+        intermediate = []   # 初始化中间值list
 
+        # 归一化后的3d参考点 
+        # ref_3d.shape = torch.Size([1, 4, 40000, 3])
         ref_3d = self.get_reference_points(
             bev_h, bev_w, self.pc_range[5]-self.pc_range[2], self.num_points_in_pillar, dim='3d', bs=bev_query.size(1),  device=bev_query.device, dtype=bev_query.dtype)
+        
+        # 归一化后的2d参考点（BEV平面）
+        # ref_2d.shape = torch.Size([1, 40000, 1, 2])
         ref_2d = self.get_reference_points(
             bev_h, bev_w, dim='2d', bs=bev_query.size(1), device=bev_query.device, dtype=bev_query.dtype)
 
+        # 3d参考点的主要作用是获取相机参考点和有效bev的mask
+        # reference_points_cam.shape = torch.Size([6, 1, 40000, 4, 2])
+        # bev_mask.shape = torch.Size([6, 1, 40000, 4])
         reference_points_cam, bev_mask = self.point_sampling(
             ref_3d, self.pc_range, kwargs['img_metas'])
 
@@ -211,6 +248,7 @@ class BEVFormerEncoder(TransformerLayerSequence):
             hybird_ref_2d = torch.stack([ref_2d, ref_2d], 1).reshape(
                 bs*2, len_bev, num_bev_level, 2)
 
+        # 逐层处理 3层BEVFormerLayer-->每层的参考点虽然相同，但是query在更新，所以产生的offset和attn weight不同
         for lid, layer in enumerate(self.layers):
             output = layer(
                 bev_query,
@@ -358,18 +396,18 @@ class BEVFormerLayer(MyCustomBaseTransformerLayer):
             if layer == 'self_attn':
 
                 query = self.attentions[attn_index](
-                    query,
-                    prev_bev,
-                    prev_bev,
-                    identity if self.pre_norm else None,
-                    query_pos=bev_pos,
-                    key_pos=bev_pos,
-                    attn_mask=attn_masks[attn_index],
-                    key_padding_mask=query_key_padding_mask,
-                    reference_points=ref_2d,
+                    query,                                                      # torch.Size([1, 40000, 256])  
+                    prev_bev,                                                   # None
+                    prev_bev,                                                   # None
+                    identity if self.pre_norm else None,                        # None
+                    query_pos=bev_pos,                                          # torch.Size([1, 40000, 256])
+                    key_pos=bev_pos,                                            # torch.Size([1, 40000, 256])
+                    attn_mask=attn_masks[attn_index],                           # None                    
+                    key_padding_mask=query_key_padding_mask,                    # None
+                    reference_points=ref_2d,                                    # torch.Size([2, 40000, 1, 2])
                     spatial_shapes=torch.tensor(
-                        [[bev_h, bev_w]], device=query.device),
-                    level_start_index=torch.tensor([0], device=query.device),
+                        [[bev_h, bev_w]], device=query.device),                 # torch.Size([1, 2])
+                    level_start_index=torch.tensor([0], device=query.device),   # torch.Size([1])
                     **kwargs)
                 attn_index += 1
                 identity = query

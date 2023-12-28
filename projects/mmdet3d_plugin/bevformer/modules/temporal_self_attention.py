@@ -176,26 +176,26 @@ class TemporalSelfAttention(BaseModule):
 
         if value is None:
             assert self.batch_first
-            bs, len_bev, c = query.shape
-            value = torch.stack([query, query], 1).reshape(bs*2, len_bev, c)
+            bs, len_bev, c = query.shape # bs = 1 len_bev = 40000, c = 256, query.shape = torch.Size([1, 40000, 256])
+            value = torch.stack([query, query], 1).reshape(bs*2, len_bev, c) # value.shape = torch.Size([2, 40000, 256])
 
             # value = torch.cat([query, query], 0)
 
         if identity is None:
             identity = query
         if query_pos is not None:
-            query = query + query_pos
+            query = query + query_pos # PE query.shape = torch.Size([1, 40000, 256])
         if not self.batch_first:
             # change to (bs, num_query ,embed_dims)
             query = query.permute(1, 0, 2)
             value = value.permute(1, 0, 2)
-        bs,  num_query, embed_dims = query.shape
-        _, num_value, _ = value.shape
+        bs,  num_query, embed_dims = query.shape # bs = 1 num_query = 40000, embed_dims = 256, query.shape = torch.Size([1, 40000, 256])
+        _, num_value, _ = value.shape # num_value = 40000 value.shape = torch.Size([2, 40000, 256])
         assert (spatial_shapes[:, 0] * spatial_shapes[:, 1]).sum() == num_value
         assert self.num_bev_queue == 2
 
-        query = torch.cat([value[:bs], query], -1)
-        value = self.value_proj(value)
+        query = torch.cat([value[:bs], query], -1) # query.shape = torch.Size([1, 40000, 512]) 在特征维度拼接当前帧和前一帧的query
+        value = self.value_proj(value) # value.shape = torch.Size([2, 40000, 256]) T-1帧和T帧的BEV拼接
 
         if key_padding_mask is not None:
             value = value.masked_fill(key_padding_mask[..., None], 0.0)
@@ -203,9 +203,12 @@ class TemporalSelfAttention(BaseModule):
         value = value.reshape(bs*self.num_bev_queue,
                               num_value, self.num_heads, -1)
 
+        # 对 query 进行维度映射得到采样点的偏移量
         sampling_offsets = self.sampling_offsets(query)
         sampling_offsets = sampling_offsets.view(
             bs, num_query, self.num_heads,  self.num_bev_queue, self.num_levels, self.num_points, 2)
+        
+        # 对 query 进行维度映射得到注意力权重
         attention_weights = self.attention_weights(query).view(
             bs, num_query,  self.num_heads, self.num_bev_queue, self.num_levels * self.num_points)
         attention_weights = attention_weights.softmax(-1)
@@ -221,6 +224,11 @@ class TemporalSelfAttention(BaseModule):
         sampling_offsets = sampling_offsets.permute(0, 3, 1, 2, 4, 5, 6)\
             .reshape(bs*self.num_bev_queue, num_query, self.num_heads, self.num_levels, self.num_points, 2)
 
+        """ sample location 的生成过程 
+        通过代码可以观察到两点：
+        1. 通过 query 学到的 sampling_offsets 偏移量是一个绝对量，不是相对量，所以需要做 normalize；
+        2. 最终生成的 sampling_locations 是一个相对量；
+        """
         if reference_points.shape[-1] == 2:
             offset_normalizer = torch.stack(
                 [spatial_shapes[..., 1], spatial_shapes[..., 0]], -1)

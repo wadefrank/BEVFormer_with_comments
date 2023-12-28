@@ -172,7 +172,7 @@ class SpatialCrossAttention(BaseModule):
         slots = slots / count[..., None]
         slots = self.output_proj(slots)
 
-        return self.dropout(slots) + inp_residual
+        return self.dropout(slots) + inp_residual # torch.Size([1, 40000, 256])
 
 
 @ATTENTION.register_module()
