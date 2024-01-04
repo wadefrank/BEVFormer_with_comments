@@ -126,15 +126,15 @@ class TemporalSelfAttention(BaseModule):
         self._is_init = True
 
     def forward(self,
-                query,
-                key=None,
-                value=None,
-                identity=None,
-                query_pos=None,
-                key_padding_mask=None,
-                reference_points=None,
-                spatial_shapes=None,
-                level_start_index=None,
+                query,                      # torch.Size([1, 40000, 256]) 
+                key=None,                   # None（第一帧）
+                value=None,                 # None（第一帧）
+                identity=None,              # None（第一帧）
+                query_pos=None,             # torch.Size([1, 40000, 256])
+                key_padding_mask=None,      # None
+                reference_points=None,      # torch.Size([2, 40000, 1, 2])
+                spatial_shapes=None,        # torch.Size([1, 2])  [[200, 200]]
+                level_start_index=None,     # torch.Size([1])     [0]
                 flag='decoder',
 
                 **kwargs):
@@ -174,29 +174,47 @@ class TemporalSelfAttention(BaseModule):
              Tensor: forwarded results with shape [num_query, bs, embed_dims].
         """
 
+
+        # value = None（第一帧）
         if value is None:
             assert self.batch_first
-            bs, len_bev, c = query.shape # bs = 1 len_bev = 40000, c = 256, query.shape = torch.Size([1, 40000, 256])
-            value = torch.stack([query, query], 1).reshape(bs*2, len_bev, c) # value.shape = torch.Size([2, 40000, 256])
+            # query.shape = torch.Size([1, 40000, 256])
+            # bs = 1 len_bev = 40000, c = 256
+            bs, len_bev, c = query.shape
+            # torch.stack([query, query], 1).shape = torch.Size([1, 2, 40000, 256])
+            # torch.stack([query, query], 1).reshape(bs*2, len_bev, c).shape = torch.Size([2, 40000, 256])
+            # value.shape = torch.Size([2, 40000, 256])
+            value = torch.stack([query, query], 1).reshape(bs*2, len_bev, c)
 
             # value = torch.cat([query, query], 0)
 
+        # identity = None（第一帧）
         if identity is None:
             identity = query
         if query_pos is not None:
             query = query + query_pos # PE query.shape = torch.Size([1, 40000, 256])
+        # self.batch_first = True
         if not self.batch_first:
             # change to (bs, num_query ,embed_dims)
             query = query.permute(1, 0, 2)
             value = value.permute(1, 0, 2)
-        bs,  num_query, embed_dims = query.shape # bs = 1 num_query = 40000, embed_dims = 256, query.shape = torch.Size([1, 40000, 256])
-        _, num_value, _ = value.shape # num_value = 40000 value.shape = torch.Size([2, 40000, 256])
+        # query.shape = torch.Size([1, 40000, 256])
+        # bs = 1 num_query = 40000, embed_dims = 256
+        bs,  num_query, embed_dims = query.shape
+        
+        # value.shape = torch.Size([2, 40000, 256])
+        # num_value = 40000 
+        _, num_value, _ = value.shape 
         assert (spatial_shapes[:, 0] * spatial_shapes[:, 1]).sum() == num_value
         assert self.num_bev_queue == 2
 
-        query = torch.cat([value[:bs], query], -1) # query.shape = torch.Size([1, 40000, 512]) 在特征维度拼接当前帧和前一帧的query
-        value = self.value_proj(value) # value.shape = torch.Size([2, 40000, 256]) T-1帧和T帧的BEV拼接
+        # query.shape = torch.Size([1, 40000, 512]) 在特征维度拼接当前帧和前一帧的query
+        query = torch.cat([value[:bs], query], -1)
 
+        # value.shape = torch.Size([2, 40000, 256]) T-1帧和T帧的BEV拼接
+        value = self.value_proj(value)
+
+        # key_padding_mask = None（第一帧）
         if key_padding_mask is not None:
             value = value.masked_fill(key_padding_mask[..., None], 0.0)
 

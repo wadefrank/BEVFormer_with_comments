@@ -251,20 +251,20 @@ class BEVFormerEncoder(TransformerLayerSequence):
         # 逐层处理 3层BEVFormerLayer-->每层的参考点虽然相同，但是query在更新，所以产生的offset和attn weight不同
         for lid, layer in enumerate(self.layers):
             output = layer(
-                bev_query,
-                key,
-                value,
-                *args,
-                bev_pos=bev_pos,
-                ref_2d=hybird_ref_2d,
-                ref_3d=ref_3d,
-                bev_h=bev_h,
-                bev_w=bev_w,
-                spatial_shapes=spatial_shapes,
-                level_start_index=level_start_index,
-                reference_points_cam=reference_points_cam,
-                bev_mask=bev_mask,
-                prev_bev=prev_bev,
+                bev_query,                                      # torch.Size([1, 40000, 256])
+                key,                                            # torch.Size([6, 30825, 1, 256])
+                value,                                          # torch.Size([6, 30825, 1, 256])
+                *args,                                          # 
+                bev_pos=bev_pos,                                # torch.Size([1, 40000, 256])
+                ref_2d=hybird_ref_2d,                           # torch.Size([2, 40000, 1, 2])
+                ref_3d=ref_3d,                                  # torch.Size([1, 4, 40000, 3])
+                bev_h=bev_h,                                    # 200
+                bev_w=bev_w,                                    # 200
+                spatial_shapes=spatial_shapes,                  # torch.Size([4, 2])
+                level_start_index=level_start_index,            # torch.Size([4])
+                reference_points_cam=reference_points_cam,      # torch.Size([6, 1, 40000, 4, 2])
+                bev_mask=bev_mask,                              # torch.Size([6, 1, 40000, 4])
+                prev_bev=prev_bev,                              # None
                 **kwargs)
 
             bev_query = output
@@ -323,24 +323,24 @@ class BEVFormerLayer(MyCustomBaseTransformerLayer):
             ['self_attn', 'norm', 'cross_attn', 'ffn'])
 
     def forward(self,
-                query,
-                key=None,
-                value=None,
-                bev_pos=None,
-                query_pos=None,
-                key_pos=None,
-                attn_masks=None,
-                query_key_padding_mask=None,
-                key_padding_mask=None,
-                ref_2d=None,
-                ref_3d=None,
-                bev_h=None,
-                bev_w=None,
-                reference_points_cam=None,
+                query,                          # torch.Size([1, 40000, 256])
+                key=None,                       # torch.Size([6, 30825, 1, 256])
+                value=None,                     # torch.Size([6, 30825, 1, 256])
+                bev_pos=None,                   # torch.Size([1, 40000, 256])
+                query_pos=None,                 # None
+                key_pos=None,                   # None
+                attn_masks=None,                # None
+                query_key_padding_mask=None,    # None
+                key_padding_mask=None,          # None
+                ref_2d=None,                    # torch.Size([2, 40000, 1, 2])
+                ref_3d=None,                    # torch.Size([1, 4, 40000, 3])
+                bev_h=None,                     # 200
+                bev_w=None,                     # 200
+                reference_points_cam=None,      # torch.Size([6, 1, 40000, 4, 2])
                 mask=None,
-                spatial_shapes=None,
-                level_start_index=None,
-                prev_bev=None,
+                spatial_shapes=None,            # torch.Size([4, 2])
+                level_start_index=None,         # torch.Size([4])
+                prev_bev=None,                  # None
                 **kwargs):
         """Forward function for `TransformerDecoderLayer`.
 
@@ -376,9 +376,13 @@ class BEVFormerLayer(MyCustomBaseTransformerLayer):
         norm_index = 0
         attn_index = 0
         ffn_index = 0
+
+        # query.shape = torch.Size([1, 40000, 256])
+        # identity.shape = torch.Size([1, 40000, 256])
         identity = query
+
         if attn_masks is None:
-            attn_masks = [None for _ in range(self.num_attn)]
+            attn_masks = [None for _ in range(self.num_attn)]   # self.num_attn = 2
         elif isinstance(attn_masks, torch.Tensor):
             attn_masks = [
                 copy.deepcopy(attn_masks) for _ in range(self.num_attn)
@@ -397,17 +401,17 @@ class BEVFormerLayer(MyCustomBaseTransformerLayer):
 
                 query = self.attentions[attn_index](
                     query,                                                      # torch.Size([1, 40000, 256])  
-                    prev_bev,                                                   # None
-                    prev_bev,                                                   # None
-                    identity if self.pre_norm else None,                        # None
+                    prev_bev,                                                   # None（第一帧）
+                    prev_bev,                                                   # None（第一帧）
+                    identity if self.pre_norm else None,                        # None（第一帧）
                     query_pos=bev_pos,                                          # torch.Size([1, 40000, 256])
                     key_pos=bev_pos,                                            # torch.Size([1, 40000, 256])
-                    attn_mask=attn_masks[attn_index],                           # None                    
+                    attn_mask=attn_masks[attn_index],                           # [None, None]                    
                     key_padding_mask=query_key_padding_mask,                    # None
                     reference_points=ref_2d,                                    # torch.Size([2, 40000, 1, 2])
                     spatial_shapes=torch.tensor(
-                        [[bev_h, bev_w]], device=query.device),                 # torch.Size([1, 2])
-                    level_start_index=torch.tensor([0], device=query.device),   # torch.Size([1])
+                        [[bev_h, bev_w]], device=query.device),                 # torch.Size([1, 2])  [[200, 200]]
+                    level_start_index=torch.tensor([0], device=query.device),   # torch.Size([1])     [0]
                     **kwargs)
                 attn_index += 1
                 identity = query
