@@ -66,7 +66,10 @@ class BEVFormer(MVXTwoStageDetector):
 
     def extract_img_feat(self, img, img_metas, len_queue=None):
         """Extract features of images."""
+        # img.shape = torch.Size([1, 6, 3, 480, 800])
+        # B = 1
         B = img.size(0)
+
         if img is not None:
             
             # input_shape = img.shape[-2:]
@@ -75,6 +78,7 @@ class BEVFormer(MVXTwoStageDetector):
             #     img_meta.update(input_shape=input_shape)
 
             if img.dim() == 5 and img.size(0) == 1:
+                # img.shape = torch.Size([6, 3, 480, 800])
                 img.squeeze_()
             elif img.dim() == 5 and img.size(0) > 1:
                 B, N, C, H, W = img.size()
@@ -82,12 +86,18 @@ class BEVFormer(MVXTwoStageDetector):
             if self.use_grid_mask:
                 img = self.grid_mask(img)
 
+            # ResNet 提取图像特征
+            # img_feats(type = <class 'tuple'>, len = 1)
+            # img_feats[0].shape = torch.Size([6, 2048, 15, 25])
             img_feats = self.img_backbone(img)
             if isinstance(img_feats, dict):
                 img_feats = list(img_feats.values())
         else:
             return None
         if self.with_img_neck:
+            # FPN 图像金字塔
+            # img_feats(type = <class 'tuple'>, len = 1)
+            # img_feats[0].shape = torch.Size([6, 256, 15, 25])
             img_feats = self.img_neck(img_feats)
 
         img_feats_reshaped = []
@@ -96,6 +106,8 @@ class BEVFormer(MVXTwoStageDetector):
             if len_queue is not None:
                 img_feats_reshaped.append(img_feat.view(int(B/len_queue), len_queue, int(BN / B), C, H, W))
             else:
+                # img_feats_reshaped(type = <class 'list'>, len = 1)
+                # img_feats_reshaped[0].shape = torch.Size([1, 6, 256, 15, 25])
                 img_feats_reshaped.append(img_feat.view(B, int(BN / B), C, H, W))
         return img_feats_reshaped
 
@@ -103,6 +115,8 @@ class BEVFormer(MVXTwoStageDetector):
     def extract_feat(self, img, img_metas=None, len_queue=None):
         """Extract features from images and points."""
 
+        # img_feats(type = <class 'list'>, len = 1)
+        # img_feats[0].shape = torch.Size([1, 6, 256, 15, 25])
         img_feats = self.extract_img_feat(img, img_metas, len_queue=len_queue)
         
         return img_feats
@@ -282,7 +296,14 @@ class BEVFormer(MVXTwoStageDetector):
 
     def simple_test(self, img_metas, img=None, prev_bev=None, rescale=False):
         """Test function without augmentaiton."""
+        # 输入：img img_metas
+        # img_feats 表示使用ResNet101提取出来的图像特征
+        # img_feats[0].shape = torch.Size([1, 6, 256, 116, 200])
+        # img_feats[1].shape = torch.Size([1, 6, 256, 58, 100])
+        # img_feats[2].shape = torch.Size([1, 6, 256, 29, 50])
+        # img_feats[3].shape = torch.Size([1, 6, 256, 15, 25])
         img_feats = self.extract_feat(img=img, img_metas=img_metas)
+
 
         bbox_list = [dict() for i in range(len(img_metas))]
         new_prev_bev, bbox_pts = self.simple_test_pts(

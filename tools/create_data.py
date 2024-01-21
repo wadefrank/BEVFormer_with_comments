@@ -69,6 +69,7 @@ def nuscenes_data_prep(root_path,
         out_dir (str): Output directory of the groundtruth database info.
         max_sweeps (int): Number of input consecutive frames. Default: 10
     """
+    # 创建pkl文件
     nuscenes_converter.create_nuscenes_infos(
         root_path, out_dir, can_bus_root_path, info_prefix, version=version, max_sweeps=max_sweeps)
 
@@ -254,16 +255,26 @@ if __name__ == '__main__':
             dataset_name='NuScenesDataset',
             out_dir=args.out_dir,
             max_sweeps=args.max_sweeps)
+    # nuscenes v1.0-mini
+    # python tools/create_data.py   \
+    # nuscenes                      \
+    # --root-path ./data/nuscenes   \
+    # --out-dir ./data/nuscenes     \
+    # --extra-tag nuscenes          \
+    # --version v1.0-mini           \
+    # --canbus ./data               \
+    # --workers 10
     elif args.dataset == 'nuscenes' and args.version == 'v1.0-mini':
+        # train_version = 'v1.0-mini'
         train_version = f'{args.version}'
         nuscenes_data_prep(
-            root_path=args.root_path,
-            can_bus_root_path=args.canbus,
-            info_prefix=args.extra_tag,
-            version=train_version,
-            dataset_name='NuScenesDataset',
-            out_dir=args.out_dir,
-            max_sweeps=args.max_sweeps)
+            root_path=args.root_path,           # './data/nuscenes'
+            can_bus_root_path=args.canbus,      # './data'
+            info_prefix=args.extra_tag,         # 'nuscenes'
+            version=train_version,              # 'v1.0-mini'
+            dataset_name='NuScenesDataset',     # 'NuScenesDataset'
+            out_dir=args.out_dir,               # './data/nuscenes'
+            max_sweeps=args.max_sweeps)         # 10
     elif args.dataset == 'lyft':
         train_version = f'{args.version}-train'
         lyft_data_prep(

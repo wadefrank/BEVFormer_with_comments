@@ -45,11 +45,16 @@ def create_nuscenes_infos(root_path,
         max_sweeps (int): Max number of sweeps.
             Default: 10
     """
+    # nuscenes-devkit
+    # https://github.com/nutonomy/nuscenes-devkit
     from nuscenes.nuscenes import NuScenes
     from nuscenes.can_bus.can_bus_api import NuScenesCanBus
     print(version, root_path)
     nusc = NuScenes(version=version, dataroot=root_path, verbose=True)
     nusc_can_bus = NuScenesCanBus(dataroot=can_bus_root_path)
+    
+    # nuscenes.utils.splits 中包含mini_train, min_val, test, train, train_detect, train_track, val等list，保存了对应的场景id
+    # 如，nuscenes.utils.splits.mini_train = ['scene-0061', 'scene-0553', 'scene-0655', 'scene-0757', 'scene-0796', 'scene-1077', 'scene-1094', 'scene-1100']
     from nuscenes.utils import splits
     available_vers = ['v1.0-trainval', 'v1.0-test', 'v1.0-mini']
     assert version in available_vers
@@ -68,9 +73,15 @@ def create_nuscenes_infos(root_path,
     # filter existing scenes.
     available_scenes = get_available_scenes(nusc)
     available_scene_names = [s['name'] for s in available_scenes]
+    # list() 方法用于将元组转换为列表
+    # filter() 函数用于过滤序列，过滤掉不符合条件的元素，返回由符合条件元素组成的新列表
+    #          该接收两个参数，第一个为函数，第二个为序列，序列的每个元素作为参数传递给函数进行判断，然后返回 True 或 False，最后将返回 True 的元素放到新列表中
+    # 分别从可用的场景中拿出跟train_scenes和val_scenes对应的场景
     train_scenes = list(
         filter(lambda x: x in available_scene_names, train_scenes))
     val_scenes = list(filter(lambda x: x in available_scene_names, val_scenes))
+    
+    # scene_id转换成scene_token
     train_scenes = set([
         available_scenes[available_scene_names.index(s)]['token']
         for s in train_scenes
@@ -80,6 +91,7 @@ def create_nuscenes_infos(root_path,
         for s in val_scenes
     ])
 
+
     test = 'test' in version
     if test:
         print('test scene: {}'.format(len(train_scenes)))
@@ -87,8 +99,12 @@ def create_nuscenes_infos(root_path,
         print('train scene: {}, val scene: {}'.format(
             len(train_scenes), len(val_scenes)))
 
+
+    ##############################################################################
+    # 开始填充数据，对于v1.0-mini数据集，test=false
     train_nusc_infos, val_nusc_infos = _fill_trainval_infos(
         nusc, nusc_can_bus, train_scenes, val_scenes, test, max_sweeps=max_sweeps)
+    ##############################################################################
 
     metadata = dict(version=version)
     if test:
@@ -132,9 +148,12 @@ def get_available_scenes(nusc):
         sd_rec = nusc.get('sample_data', sample_rec['data']['LIDAR_TOP'])
         has_more_frames = True
         scene_not_exist = False
+
+        # 获取lidar的绝对路径，并判断绝对路径下lidar文件是否存在
         while has_more_frames:
             lidar_path, boxes, _ = nusc.get_sample_data(sd_rec['token'])
             lidar_path = str(lidar_path)
+            # os.getcwd() 返回当前进程的工作目录（如：'/home/wade/wade/Code/BEV/BEVFormer'）
             if os.getcwd() in lidar_path:
                 # path from lyftdataset is absolute path
                 lidar_path = lidar_path.split(f'{os.getcwd()}/')[-1]
@@ -147,6 +166,7 @@ def get_available_scenes(nusc):
         if scene_not_exist:
             continue
         available_scenes.append(scene)
+
     print('exist scene num: {}'.format(len(available_scenes)))
     return available_scenes
 
@@ -155,11 +175,15 @@ def _get_can_bus_info(nusc, nusc_can_bus, sample):
     scene_name = nusc.get('scene', sample['scene_token'])['name']
     sample_timestamp = sample['timestamp']
     try:
+        # pose_list 保存对应场景世界坐标系下的位姿信息，频率50Hz
+        #           (accel(3), orientation(4, q1=q2=0.0), pos(3,z=0.0), rotation_rate(3), utime(1), vel(3))
         pose_list = nusc_can_bus.get_messages(scene_name, 'pose')
     except:
         return np.zeros(18)  # server scenes do not have can bus information.
     can_bus = []
+
     # during each scene, the first timestamp of can_bus may be large than the first sample's timestamp
+    # 将时间戳大于sample时间戳的第一个can_bus数据，用作sample数据
     last_pose = pose_list[0]
     for i, pose in enumerate(pose_list):
         if pose['utime'] > sample_timestamp:
@@ -168,6 +192,8 @@ def _get_can_bus_info(nusc, nusc_can_bus, sample):
     _ = last_pose.pop('utime')  # useless
     pos = last_pose.pop('pos')
     rotation = last_pose.pop('orientation')
+
+    # list.extend，在当前list的末尾添加指定list元素
     can_bus.extend(pos)
     can_bus.extend(rotation)
     for key in last_pose.keys():
@@ -199,12 +225,15 @@ def _fill_trainval_infos(nusc,
     train_nusc_infos = []
     val_nusc_infos = []
     frame_idx = 0
+    # mmcv.track_iter_progress() 刷新进度条
     for sample in mmcv.track_iter_progress(nusc.sample):
         lidar_token = sample['data']['LIDAR_TOP']
         sd_rec = nusc.get('sample_data', sample['data']['LIDAR_TOP'])
         cs_record = nusc.get('calibrated_sensor',
                              sd_rec['calibrated_sensor_token'])
         pose_record = nusc.get('ego_pose', sd_rec['ego_pose_token'])
+
+        # 获取雷达路径和3d框，get_sample_data返回的是对应传感器坐标系下的位姿，此处是lidar坐标系下
         lidar_path, boxes, _ = nusc.get_sample_data(lidar_token)
 
         mmcv.check_file_exist(lidar_path)
@@ -268,7 +297,9 @@ def _fill_trainval_infos(nusc,
             else:
                 break
         info['sweeps'] = sweeps
+
         # obtain annotation
+        # 获取标注信息
         if not test:
             annotations = [
                 nusc.get('sample_annotation', token)
