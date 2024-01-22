@@ -101,8 +101,21 @@ class BEVFormerHead(DETRHead):
                 [reg_branch for _ in range(num_pred)])
 
         if not self.as_two_stage:
+            # torch.nn.Embedding() 将输入向量化
+            # 参数：
+            #   - num_embeddings 字典中词的个数
+            #   - embedding_dim  embedding的维度
+            # 返回值：<class 'torch.nn.modules.sparse.Embedding'>
+            #   - Embedding(*, H) 其中 * = num_embeddings，H = embedding_dim
+
+            # self.bev_h = 200
+            # self.bev_w = 200
+            # self.embed_dims = 256
             self.bev_embedding = nn.Embedding(
                 self.bev_h * self.bev_w, self.embed_dims)
+
+            # self.num_query = 900
+            # self.embed_dims = 256
             self.query_embedding = nn.Embedding(self.num_query,
                                                 self.embed_dims * 2)
 
@@ -131,15 +144,45 @@ class BEVFormerHead(DETRHead):
                 head with normalized coordinate format (cx, cy, w, l, cz, h, theta, vx, vy). \
                 Shape [nb_dec, bs, num_query, 9].
         """
+
+        # type(mlvl_feats) = <class 'list'>
+        # len(mlvl_feats) = 4
+        # mlvl_feats[0].shape = torch.Size([1, 6, 256, 116, 200])
+        # mlvl_feats[1].shape = torch.Size([1, 6, 256, 58, 100])
+        # mlvl_feats[2].shape = torch.Size([1, 6, 256, 29, 50])
+        # mlvl_feats[3].shape = torch.Size([1, 6, 256, 15, 25])
+        # mlvl_feats[0].dtype = torch.float32
+        # mlvl_feats[1].dtype = torch.float32
+        # mlvl_feats[2].dtype = torch.float32
+        # mlvl_feats[3].dtype = torch.float32
+
+        # bs = 1 num_cam = 6
         bs, num_cam, _, _, _ = mlvl_feats[0].shape
+
+        # dtype = torch.float32
         dtype = mlvl_feats[0].dtype
+
+        # torch.Tensor.to(dtype) 返回制定类型的Tensor
+
+        # type(self.query_embedding) = <class 'torch.nn.modules.sparse.Embedding'>
+        # self.query_embedding.weight.shape = torch.Size([900, 512])
+        # object_query_embeds.shape = torch.Size([900, 512])
         object_query_embeds = self.query_embedding.weight.to(dtype)
+
+        # type(self.bev_embedding) = <class 'torch.nn.modules.sparse.Embedding'>
+        # self.bev_embedding.weight.shape = torch.Size([40000, 256])
+        # bev_queries.shape = torch.Size([40000, 256])
         bev_queries = self.bev_embedding.weight.to(dtype)
 
+        # bev_mask.shape = torch.Size([1, 200, 200])
         bev_mask = torch.zeros((bs, self.bev_h, self.bev_w),
                                device=bev_queries.device).to(dtype)
+
+        # positional_encoding() anaconda3/envs/bevformer/lib/python3.8/site-packages/mmdet/models/dense_heads/detr_head.py
+        # bev_pos.shape = torch.Size([1, 256, 200, 200])
         bev_pos = self.positional_encoding(bev_mask).to(dtype)
 
+        # only_bev = false
         if only_bev:  # only use encoder to obtain BEV features, TODO: refine the workaround
             return self.transformer.get_bev_features(
                 mlvl_feats,
@@ -154,18 +197,18 @@ class BEVFormerHead(DETRHead):
             )
         else:
             outputs = self.transformer(
-                mlvl_feats,
-                bev_queries,
-                object_query_embeds,
-                self.bev_h,
-                self.bev_w,
-                grid_length=(self.real_h / self.bev_h,
-                             self.real_w / self.bev_w),
-                bev_pos=bev_pos,
-                reg_branches=self.reg_branches if self.with_box_refine else None,  # noqa:E501
-                cls_branches=self.cls_branches if self.as_two_stage else None,
-                img_metas=img_metas,
-                prev_bev=prev_bev
+                mlvl_feats,                             # list，大小为6，mlvl_feats[0].shape = torch.Size([1, 6, 256, 116, 200])
+                bev_queries,                            # torch.Size([40000, 256])
+                object_query_embeds,                    # torch.Size([900, 512])
+                self.bev_h,                             # 200
+                self.bev_w,                             # 200
+                grid_length=(self.real_h / self.bev_h,  # self.real_h = self.real_w = 102.4
+                             self.real_w / self.bev_w), # (0.512, 0.512)
+                bev_pos=bev_pos,                        # torch.Size([1, 256, 200, 200]) 位置编码
+                reg_branches=self.reg_branches if self.with_box_refine else None,   # noqa:E501 self.with_box_refine = True, type(self.reg_branches) = <class 'torch.nn.modules.container.ModuleList'> 6层
+                cls_branches=self.cls_branches if self.as_two_stage else None,      # self.as_two_stage = False, type(self.cls_branches) = None
+                img_metas=img_metas,                    # type(img_metas) = <class 'list'> 记录图像的一些信息，包括filename、ori_shape、img_shape、pad_shape、外参等信息
+                prev_bev=prev_bev                       # prev_bev = None
         )
 
         bev_embed, hs, init_reference, inter_references = outputs
